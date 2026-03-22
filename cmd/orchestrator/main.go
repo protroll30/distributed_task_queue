@@ -8,6 +8,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	goredis "github.com/redis/go-redis/v9"
+
 	"github.com/distributed_task_queue/distributed_task_queue/internal/config"
 	"github.com/distributed_task_queue/distributed_task_queue/internal/db"
 	"github.com/distributed_task_queue/distributed_task_queue/internal/orchestrator"
@@ -36,6 +39,11 @@ func main() {
 		log.Fatalf("redis ping: %v", err)
 	}
 
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go reconcileLoop(sigCtx, pool, rdb, cfg)
+
 	mux := http.NewServeMux()
 	srv := &orchestrator.Server{Pool: pool, RDB: rdb, Prefix: cfg.RedisKeyPrefix}
 	srv.Register(mux)
@@ -53,13 +61,32 @@ func main() {
 		}
 	}()
 
-	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	<-sigCtx.Done()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Printf("http shutdown: %v", err)
+	}
+}
+
+func reconcileLoop(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Client, cfg config.Config) {
+	t := time.NewTicker(cfg.ReconcileInterval)
+	defer t.Stop()
+	for {
+		n, err := orchestrator.ReconcileOnce(ctx, pool, rdb, cfg)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("reconciler: %v", err)
+		} else if n > 0 {
+			log.Printf("reconciler: enqueued %d task(s)", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 	}
 }

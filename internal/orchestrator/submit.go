@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,7 +21,11 @@ func SubmitTask(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Client, pr
 		return uuid.Nil, err
 	}
 	key := appredis.ReadyList(prefix, appredis.DefaultPriority)
+	if _, err := appredis.TryReservePending(ctx, rdb, prefix, taskID.String(), 5*time.Minute); err != nil {
+		return uuid.Nil, err
+	}
 	if err := appredis.EnqueueReady(ctx, rdb, key, taskID.String()); err != nil {
+		_ = appredis.ReleasePending(ctx, rdb, prefix, taskID.String())
 		return uuid.Nil, err
 	}
 	return taskID, nil

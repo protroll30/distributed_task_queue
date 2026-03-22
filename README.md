@@ -28,7 +28,7 @@ Loaded by both binaries via [`internal/config`](internal/config/config.go). `CRD
 | `REDIS_ADDR` | `127.0.0.1:6379` | Redis address |
 | `REDIS_KEY_PREFIX` | `dto:` | Prefix for Redis keys (see INSTRUCTIONS) |
 | `ORCHESTRATOR_LISTEN` | `:8080` | Orchestrator HTTP bind (`GET /healthz`, `POST /v1/tasks`) |
-| `RECONCILE_INTERVAL` | `30s` | Scheduler/reconciler tick (reserved) |
+| `RECONCILE_INTERVAL` | `30s` | Background reconciler: re-enqueue due `queued` tasks (CRDB → Redis) |
 | `WORKER_ID` | random UUID | Stable worker identity if set |
 | `WORKER_CONCURRENCY` | `1` | Parallel BRPOP worker loops |
 | `LEASE_DURATION` | `30s` | Logical lease window; Redis key TTL adds a buffer |
@@ -57,6 +57,8 @@ curl -sS -X POST http://127.0.0.1:8080/v1/tasks \
 
 The worker logs a line like `echo: kind=echo attempt=1 payload=...`. `GET http://127.0.0.1:8080/healthz` checks DB + Redis connectivity.
 
+Jobs move **`pending` → `running` → `completed`** (or **`failed`**) as tasks finish; the orchestrator **reconciler** periodically re-enqueues **`queued`** rows that are due (`scheduled_at <= now()`), using Redis **pending** markers to avoid spamming duplicate LPUSHes.
+
 ## Layout
 
 - `cmd/orchestrator` — HTTP API, DB ping, task submission
@@ -64,6 +66,6 @@ The worker logs a line like `echo: kind=echo attempt=1 payload=...`. `GET http:/
 - `internal/config` — environment configuration
 - `internal/db` — Cockroach pool (`pgxpool`), jobs/tasks, task_run lifecycle
 - `internal/redis` — Redis client, key layout, ready LIST, lease hashes, scheduled ZSET helpers
-- `internal/orchestrator` — submit path + HTTP handlers
+- `internal/orchestrator` — submit path, HTTP handlers, reconciler (`ReconcileOnce`)
 - `internal/worker` — `pkg/worker.Runtime` implementation
 - `pkg/worker` — task handler API types

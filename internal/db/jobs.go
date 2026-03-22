@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,4 +31,44 @@ RETURNING id`, jobID, taskName, kind, payload, maxAttempts).Scan(&taskID); err !
 		return uuid.Nil, err
 	}
 	return taskID, nil
+}
+
+// RefreshJobStatus sets jobs.status from tasks: any failed → failed; all completed → completed;
+// all cancelled → cancelled; otherwise running.
+func RefreshJobStatus(ctx context.Context, pool *pgxpool.Pool, jobID uuid.UUID) error {
+	const q = `
+SELECT
+	count(*) FILTER (WHERE status = 'failed') AS n_failed,
+	count(*) FILTER (WHERE status = 'completed') AS n_done,
+	count(*) FILTER (WHERE status = 'cancelled') AS n_cancelled,
+	count(*) AS n_total
+FROM tasks WHERE job_id = $1`
+	var nFailed, nDone, nCancel, nTotal int
+	if err := pool.QueryRow(ctx, q, jobID).Scan(&nFailed, &nDone, &nCancel, &nTotal); err != nil {
+		return err
+	}
+	if nTotal == 0 {
+		return fmt.Errorf("db: refresh job: no tasks for job %s", jobID)
+	}
+	var status string
+	switch {
+	case nFailed > 0:
+		status = "failed"
+	case nDone+nCancel == nTotal:
+		if nCancel == nTotal {
+			status = "cancelled"
+		} else {
+			status = "completed"
+		}
+	default:
+		status = "running"
+	}
+	tag, err := pool.Exec(ctx, `UPDATE jobs SET status = $2, updated_at = now() WHERE id = $1`, jobID, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("db: refresh job: no job row for %s", jobID)
+	}
+	return nil
 }

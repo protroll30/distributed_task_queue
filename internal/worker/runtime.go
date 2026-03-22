@@ -128,6 +128,8 @@ func (r *Runtime) processTask(ctx context.Context, id uuid.UUID) {
 		log.Printf("worker: claim %s: %v", id, err)
 		return
 	}
+	_ = appredis.ReleasePending(ctx, r.rdb, r.cfg.RedisKeyPrefix, task.ID.String())
+	r.refreshJob(context.Background(), task.JobID)
 
 	runID, err := db.InsertTaskRun(ctx, r.pool, task.ID, task.Attempt, r.cfg.WorkerID)
 	if err != nil {
@@ -145,6 +147,7 @@ func (r *Runtime) processTask(ctx context.Context, id uuid.UUID) {
 	h := r.handlerFor(task.Kind)
 	if h == nil {
 		_ = db.FailTaskPermanent(ctx, r.pool, runID, task.ID, "unknown task kind: "+task.Kind)
+		r.refreshJob(context.Background(), task.JobID)
 		return
 	}
 
@@ -172,6 +175,8 @@ func (r *Runtime) processTask(ctx context.Context, id uuid.UUID) {
 	if err == nil {
 		if err := db.CompleteTaskSuccess(ctx, r.pool, runID, task.ID); err != nil {
 			log.Printf("worker: complete: %v", err)
+		} else {
+			r.refreshJob(context.Background(), task.JobID)
 		}
 		return
 	}
@@ -180,6 +185,8 @@ func (r *Runtime) processTask(ctx context.Context, id uuid.UUID) {
 	if task.Attempt >= task.MaxAttempts {
 		if err := db.FailTaskPermanent(ctx, r.pool, runID, task.ID, errMsg); err != nil {
 			log.Printf("worker: fail permanent: %v", err)
+		} else {
+			r.refreshJob(context.Background(), task.JobID)
 		}
 		return
 	}
@@ -188,8 +195,22 @@ func (r *Runtime) processTask(ctx context.Context, id uuid.UUID) {
 		log.Printf("worker: fail retry: %v", err)
 		return
 	}
+	r.refreshJob(context.Background(), task.JobID)
+	if _, err := appredis.TryReservePending(ctx, r.rdb, r.cfg.RedisKeyPrefix, task.ID.String(), 5*time.Minute); err != nil {
+		log.Printf("worker: retry reserve: %v", err)
+		return
+	}
 	if err := appredis.EnqueueReady(ctx, r.rdb, r.readyKey, task.ID.String()); err != nil {
+		_ = appredis.ReleasePending(ctx, r.rdb, r.cfg.RedisKeyPrefix, task.ID.String())
 		log.Printf("worker: requeue: %v", err)
+	}
+}
+
+func (r *Runtime) refreshJob(ctx context.Context, jobID uuid.UUID) {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := db.RefreshJobStatus(cctx, r.pool, jobID); err != nil {
+		log.Printf("worker: refresh job %s: %v", jobID, err)
 	}
 }
 
