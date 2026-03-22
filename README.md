@@ -27,13 +27,19 @@ Loaded by both binaries via [`internal/config`](internal/config/config.go). `CRD
 | `CRDB_DSN` | — | CockroachDB / Postgres DSN for `pgx` |
 | `REDIS_ADDR` | `127.0.0.1:6379` | Redis address |
 | `REDIS_KEY_PREFIX` | `dto:` | Prefix for Redis keys (see INSTRUCTIONS) |
-| `ORCHESTRATOR_LISTEN` | `:8080` | Orchestrator HTTP/gRPC bind (future) |
-| `RECONCILE_INTERVAL` | `30s` | Scheduler/reconciler tick (future) |
+| `ORCHESTRATOR_LISTEN` | `:8080` | Orchestrator HTTP bind (`GET /healthz`, `POST /v1/tasks`) |
+| `RECONCILE_INTERVAL` | `30s` | Scheduler/reconciler tick (reserved) |
 | `WORKER_ID` | random UUID | Stable worker identity if set |
-| `WORKER_CONCURRENCY` | `1` | Parallel task executions (future) |
-| `LEASE_DURATION` | `30s` | Redis lease TTL for claimed tasks (future) |
+| `WORKER_CONCURRENCY` | `1` | Parallel BRPOP worker loops |
+| `LEASE_DURATION` | `30s` | Logical lease window; Redis key TTL adds a buffer |
+| `RETRY_BACKOFF` | `5s` | Delay before a failed task is re-queued (when attempts remain) |
 
-## Run (smoke)
+## Run (end-to-end)
+
+1. Apply [migrations](migrations/001_initial.sql) to your CockroachDB cluster.
+2. Start **Redis** (default `127.0.0.1:6379`).
+3. In one terminal, run the **orchestrator** (HTTP API + enqueue).
+4. In another, run the **worker** (registers a demo `echo` handler).
 
 ```bash
 export CRDB_DSN='postgresql://root@localhost:26257/defaultdb?sslmode=disable'
@@ -41,33 +47,23 @@ go run ./cmd/orchestrator
 go run ./cmd/worker
 ```
 
-PowerShell (`$env:` is only valid here, not in **cmd.exe**):
+Submit a task (orchestrator listens on `:8080` by default):
 
-```powershell
-$env:CRDB_DSN = 'postgresql://root@localhost:26257/defaultdb?sslmode=disable'
-go run ./cmd/orchestrator
+```bash
+curl -sS -X POST http://127.0.0.1:8080/v1/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"kind":"echo","payload":{"msg":"hi"}}'
 ```
 
-Command Prompt (**cmd.exe**): run `set` on its **own line** (or use `&&`). Pasting `go run` on the same line as `set` without a separator can merge into a bad path like `cmd\orchestratorset`.
-
-```bat
-set CRDB_DSN=postgresql://root@localhost:26257/defaultdb?sslmode=disable
-go run ./cmd/orchestrator
-```
-
-One line:
-
-```bat
-set CRDB_DSN=postgresql://root@localhost:26257/defaultdb?sslmode=disable && go run ./cmd/orchestrator
-```
-
-Each process loads config, logs non-secret settings, then waits for Ctrl+C.
+The worker logs a line like `echo: kind=echo attempt=1 payload=...`. `GET http://127.0.0.1:8080/healthz` checks DB + Redis connectivity.
 
 ## Layout
 
-- `cmd/orchestrator` — API + scheduler (stub; loads config)
-- `cmd/worker` — worker process (stub; loads config)
+- `cmd/orchestrator` — HTTP API, DB ping, task submission
+- `cmd/worker` — worker process (`echo` demo handler)
 - `internal/config` — environment configuration
-- `internal/db` — Cockroach pool (`pgxpool`), task/task_run lifecycle queries
+- `internal/db` — Cockroach pool (`pgxpool`), jobs/tasks, task_run lifecycle
 - `internal/redis` — Redis client, key layout, ready LIST, lease hashes, scheduled ZSET helpers
+- `internal/orchestrator` — submit path + HTTP handlers
+- `internal/worker` — `pkg/worker.Runtime` implementation
 - `pkg/worker` — task handler API types

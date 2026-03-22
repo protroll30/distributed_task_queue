@@ -19,6 +19,7 @@ type Config struct {
 	WorkerID           string
 	WorkerConcurrency  int
 	LeaseDuration      time.Duration
+	RetryBackoff       time.Duration
 }
 
 // Load reads configuration from the environment. CRDB_DSN is required; other fields use documented defaults.
@@ -29,6 +30,7 @@ func Load() (Config, error) {
 		OrchestratorListen: getEnv("ORCHESTRATOR_LISTEN", ":8080"),
 		ReconcileInterval:  30 * time.Second,
 		LeaseDuration:      30 * time.Second,
+		RetryBackoff:       5 * time.Second,
 		WorkerConcurrency:  1,
 	}
 
@@ -52,6 +54,14 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("RECONCILE_INTERVAL: %w", err)
 		}
 		c.ReconcileInterval = d
+	}
+
+	if v := os.Getenv("RETRY_BACKOFF"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("RETRY_BACKOFF: %w", err)
+		}
+		c.RetryBackoff = d
 	}
 
 	if v := os.Getenv("WORKER_CONCURRENCY"); v != "" {

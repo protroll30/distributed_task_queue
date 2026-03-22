@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
-	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/distributed_task_queue/distributed_task_queue/internal/config"
+	"github.com/distributed_task_queue/distributed_task_queue/internal/db"
+	appredis "github.com/distributed_task_queue/distributed_task_queue/internal/redis"
+	wruntime "github.com/distributed_task_queue/distributed_task_queue/internal/worker"
+	pkgworker "github.com/distributed_task_queue/distributed_task_queue/pkg/worker"
 )
 
 func main() {
@@ -14,10 +19,33 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	log.Printf("worker: id=%s concurrency=%d lease=%s redis=%s",
-		cfg.WorkerID, cfg.WorkerConcurrency, cfg.LeaseDuration, cfg.RedisAddr)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	pool, err := db.NewPool(ctx, cfg.CRDBDSN)
+	if err != nil {
+		log.Fatalf("db: %v", err)
+	}
+	defer pool.Close()
+
+	rdb := appredis.New(cfg.RedisAddr)
+	defer rdb.Close()
+
+	if err := pool.Ping(ctx); err != nil {
+		log.Fatalf("db ping: %v", err)
+	}
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		log.Fatalf("redis ping: %v", err)
+	}
+
+	rt := wruntime.NewRuntime(pkgworker.Options{}, cfg, pool, rdb)
+	rt.Register("echo", func(ctx context.Context, t pkgworker.Task) error {
+		log.Printf("echo: kind=%s attempt=%d payload=%s", t.Kind, t.Attempt, string(t.Payload))
+		return nil
+	})
+
+	log.Printf("worker: id=%s concurrency=%d (echo handler registered)", cfg.WorkerID, cfg.WorkerConcurrency)
+	if err := rt.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		log.Fatalf("worker: %v", err)
+	}
 }
