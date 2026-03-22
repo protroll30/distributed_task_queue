@@ -55,7 +55,7 @@ Loaded by both binaries via [`internal/config`](internal/config/config.go). `CRD
 | `CRDB_DSN` | — | CockroachDB / Postgres DSN for `pgx` |
 | `REDIS_ADDR` | `127.0.0.1:6379` | Redis address |
 | `REDIS_KEY_PREFIX` | `dto:` | Prefix for Redis keys (see INSTRUCTIONS) |
-| `ORCHESTRATOR_LISTEN` | `:8080` | Orchestrator HTTP bind (`GET /healthz`, task/job read + submit routes below) |
+| `ORCHESTRATOR_LISTEN` | `:8080` | Orchestrator HTTP bind (`GET /healthz`, `GET /metrics`, task/job routes below) |
 | `RECONCILE_INTERVAL` | `30s` | Background reconciler: re-enqueue due `queued` tasks (CRDB → Redis) |
 | `STALE_RUNNING_AFTER` | `2 × LEASE_DURATION` | Min time a task stays `running` before the reconciler may reclaim it if the Redis lease key is missing |
 | `WORKER_ID` | random UUID | Stable worker identity if set |
@@ -95,6 +95,8 @@ curl -sS -X POST http://127.0.0.1:8080/v1/jobs \
 Task names must be unique per job. Dependency edges are validated (unknown names, self-deps, and cycles return **400**). A dependent is promoted to `queued` only when **every** dependency is `completed`. If a task **fails permanently**, downstream tasks still in `pending` are **cascaded** to `failed` (transitive, BFS).
 
 The worker logs a line like `echo: kind=echo attempt=1 payload=...`. `GET http://127.0.0.1:8080/healthz` checks DB + Redis connectivity.
+
+**Prometheus** — `GET http://127.0.0.1:8080/metrics` exposes Go process/runtime metrics, `orchestrator_http_*`, `orchestrator_tasks_submitted_total`, `orchestrator_jobs_submitted_total`, and reconciler counters (`orchestrator_reconcile_*`).
 
 **Read APIs** — `GET /v1/tasks/{id}` returns a task row (status, attempts, timestamps, payload). `GET /v1/jobs/{id}` returns the job plus all tasks in that job. Unknown UUIDs return **404**; malformed IDs return **400**.
 

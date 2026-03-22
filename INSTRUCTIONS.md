@@ -311,6 +311,7 @@ The control plane is **HTTP only** (no gRPC in this repo). Bind address: `ORCHES
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/healthz` | **200** if CockroachDB and Redis ping succeed; **503** otherwise |
+| `GET` | `/metrics` | Prometheus text exposition (Go/process collectors + `orchestrator_*` HTTP and business metrics) |
 | `POST` | `/v1/tasks` | JSON body `{"kind","payload"}` — creates a single-task job, enqueues task ID; **201** + `{"task_id"}` |
 | `GET` | `/v1/tasks/{id}` | Task row JSON (status, attempts, timestamps, payload); **404** if unknown; **400** if `id` is not a UUID |
 | `POST` | `/v1/jobs` | JSON body `{"tasks":[...]}` — DAG job with `name`, `kind`, `payload`, optional `depends_on` (names); **201** + `job_id` and `tasks` name→id map; **400** on validation (cycles, unknown deps, etc.) |

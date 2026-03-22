@@ -45,6 +45,7 @@ type jobResponse struct {
 
 // Register attaches routes to mux.
 func (s *Server) Register(mux *http.ServeMux) {
+	mux.Handle("GET /metrics", MetricsHTTPHandler())
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /v1/tasks", s.handleSubmit)
 	mux.HandleFunc("GET /v1/tasks/{id}", s.handleGetTask)
@@ -92,6 +93,7 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	TasksSubmittedTotal.Inc()
 	_ = json.NewEncoder(w).Encode(submitResponse{TaskID: id.String()})
 }
 
@@ -137,5 +139,6 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	JobsSubmittedTotal.Inc()
 	_ = json.NewEncoder(w).Encode(jobResponse{JobID: jobID.String(), Tasks: out})
 }

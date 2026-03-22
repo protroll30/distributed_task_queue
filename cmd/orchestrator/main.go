@@ -10,6 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 
 	"github.com/distributed_task_queue/distributed_task_queue/internal/config"
 	"github.com/distributed_task_queue/distributed_task_queue/internal/db"
@@ -39,6 +41,9 @@ func main() {
 		log.Fatalf("redis ping: %v", err)
 	}
 
+	prometheus.MustRegister(collectors.NewGoCollector())
+	prometheus.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -47,10 +52,11 @@ func main() {
 	mux := http.NewServeMux()
 	srv := &orchestrator.Server{Pool: pool, RDB: rdb, Prefix: cfg.RedisKeyPrefix}
 	srv.Register(mux)
+	handler := orchestrator.MetricsMiddleware(mux)
 
 	httpServer := &http.Server{
 		Addr:              cfg.OrchestratorListen,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -80,8 +86,11 @@ func reconcileLoop(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Client,
 				return
 			}
 			log.Printf("reconciler: %v", err)
-		} else if n > 0 {
-			log.Printf("reconciler: enqueued %d due queued task(s)", n)
+		} else {
+			orchestrator.ReconcileEnqueuedTasksTotal.Add(float64(n))
+			if n > 0 {
+				log.Printf("reconciler: enqueued %d due queued task(s)", n)
+			}
 		}
 
 		r, err := orchestrator.ReclaimStaleRunningOnce(ctx, pool, rdb, cfg)
@@ -90,8 +99,11 @@ func reconcileLoop(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Client,
 				return
 			}
 			log.Printf("reconciler: stale running: %v", err)
-		} else if r > 0 {
-			log.Printf("reconciler: reclaimed %d stale running task(s)", r)
+		} else {
+			orchestrator.ReconcileStaleRunningReclaimedTotal.Add(float64(r))
+			if r > 0 {
+				log.Printf("reconciler: reclaimed %d stale running task(s)", r)
+			}
 		}
 		select {
 		case <-ctx.Done():
