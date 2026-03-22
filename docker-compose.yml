@@ -1,0 +1,26 @@
+# Local dev dependencies only (not production topology).
+# CockroachDB admin UI: http://localhost:8089 (orchestrator uses :8080 by default on the host).
+
+services:
+  cockroach:
+    image: cockroachdb/cockroach:v24.3.4
+    command: start-single-node --insecure --listen-addr=0.0.0.0 --advertise-addr=localhost
+    ports:
+      - "26257:26257"
+      - "8089:8080"
+    healthcheck:
+      test: ["CMD", "cockroach", "sql", "--insecure", "--host=localhost", "-e", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 5

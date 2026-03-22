@@ -5,10 +5,38 @@ Distributed task orchestrator in Go (CockroachDB + Redis). Design and schema: [I
 ## Prerequisites
 
 - Go 1.22+
-- CockroachDB (PostgreSQL wire protocol)
-- Redis
+- **Either** Docker (recommended for local dependencies) **or** your own CockroachDB + Redis
 
-## Database migrations
+## Docker Compose (local CockroachDB + Redis)
+
+From the repo root:
+
+```bash
+docker compose up -d
+```
+
+Stop: `docker compose down`.
+
+- **SQL** (from the host): `postgresql://root@127.0.0.1:26257/defaultdb?sslmode=disable`
+- **CockroachDB UI** (mapped to avoid clashing with the orchestrator): [http://127.0.0.1:8089](http://127.0.0.1:8089)
+- **Redis**: `127.0.0.1:6379`
+
+Apply the schema (pick one):
+
+```bash
+# Make (Git Bash / WSL / Unix shell)
+make migrate
+
+# Or bash helper
+./scripts/migrate.sh
+
+# Or PowerShell
+powershell -File scripts/migrate.ps1
+```
+
+Copy [`.env.example`](.env.example) to `.env` and load it in your shell if you use a tool that reads `.env` automatically; otherwise set `CRDB_DSN` / `REDIS_ADDR` as in the table below.
+
+## Database migrations (any cluster)
 
 Apply the initial schema:
 
@@ -71,6 +99,9 @@ Jobs move **`pending` → `running` → `completed`** (or **`failed`**) as tasks
 
 ## Layout
 
+- [`docker-compose.yml`](docker-compose.yml) — local CockroachDB + Redis
+- [`Makefile`](Makefile) — `make compose-up`, `make migrate`, …
+- `scripts/` — `migrate.sh` / `migrate.ps1` helpers
 - `cmd/orchestrator` — HTTP API, DB ping, task submission
 - `cmd/worker` — worker process (`echo` demo handler)
 - `internal/config` — environment configuration
