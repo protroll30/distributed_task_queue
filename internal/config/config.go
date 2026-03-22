@@ -16,10 +16,10 @@ type Config struct {
 	RedisKeyPrefix     string
 	OrchestratorListen string
 	ReconcileInterval  time.Duration
-	WorkerID           string
-	WorkerConcurrency  int
-	LeaseDuration      time.Duration
-	RetryBackoff       time.Duration
+	WorkerID             string
+	WorkerConcurrency    int
+	LeaseDuration        time.Duration
+	RetryBackoff         time.Duration
 	// StaleRunningAfter is the minimum time a task may stay status=running before the
 	// reconciler considers reclaiming it when the Redis lease key is absent.
 	StaleRunningAfter time.Duration

@@ -7,6 +7,13 @@ Distributed task orchestrator in Go (CockroachDB + Redis). Design and schema: [I
 - Go 1.22+
 - **Either** Docker (recommended for local dependencies) **or** your own CockroachDB + Redis
 
+### Go build: `cannot find package` / `-mod=vendor`
+
+If `go build` or `go run` fails with **cannot find package**, or *import lookup disabled by -mod=vendor*:
+
+- **Incomplete `vendor/`**: When a `vendor/` directory exists, Go may use **vendor mode** (`-mod=vendor`). Every dependency must appear under `vendor/` (for example `vendor/github.com/jackc/...`, `vendor/github.com/redis/...`). From the repo root run **`go mod vendor`** after `go.mod` is complete, or delete `vendor/` if you prefer module cache builds only.
+- **`GOFLAGS`**: If you set **`GOFLAGS=-mod=vendor`** globally (`go env -w`, shell profile, or Cursor/VS Code `go.buildFlags` / `go.toolsEnvVars`), either keep `vendor/` in sync with **`go mod vendor`** or remove `-mod=vendor` when `vendor/` is incomplete. Cloud sync (e.g. OneDrive) can sometimes leave `vendor/` partially synced—re-run **`go mod vendor`** locally if needed.
+
 ## Docker Compose (local CockroachDB + Redis)
 
 From the repo root:
@@ -30,8 +37,12 @@ make migrate
 # Or bash helper
 ./scripts/migrate.sh
 
-# Or PowerShell
-powershell -File scripts/migrate.ps1
+# Or PowerShell (with Docker Compose Cockroach running)
+powershell -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+
+# PowerShell without Docker: set CRDB_DSN and use the Cockroach CLI on PATH
+# $env:CRDB_DSN = "postgresql://root@127.0.0.1:26257/defaultdb?sslmode=disable"
+# powershell -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
 ```
 
 Copy [`.env.example`](.env.example) to `.env` and load it in your shell if you use a tool that reads `.env` automatically; otherwise set `CRDB_DSN` / `REDIS_ADDR` as in the table below.

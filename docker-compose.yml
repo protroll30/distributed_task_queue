@@ -4,7 +4,9 @@
 services:
   cockroach:
     image: cockroachdb/cockroach:v24.3.4
-    command: start-single-node --insecure --listen-addr=0.0.0.0 --advertise-addr=localhost
+    # Do not set --listen-addr=0.0.0.0: v24+ rejects it for insecure start-single-node.
+    # Image defaults work with Docker port publishing.
+    command: start-single-node --insecure
     ports:
       - "26257:26257"
       - "8089:8080"
