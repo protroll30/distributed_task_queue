@@ -63,7 +63,7 @@ curl -sS -X POST http://127.0.0.1:8080/v1/jobs \
   -d '{"tasks":[{"name":"a","kind":"echo","payload":{"n":1}},{"name":"b","kind":"echo","payload":{"n":2},"depends_on":["a"]}]}'
 ```
 
-Task names must be unique per job. Dependency edges are validated (unknown names, self-deps, and cycles return **400**). A dependent is promoted to `queued` only when **every** dependency is `completed` (a permanently failed upstream leaves dependents stuck in `pending` until a future release adds cascade).
+Task names must be unique per job. Dependency edges are validated (unknown names, self-deps, and cycles return **400**). A dependent is promoted to `queued` only when **every** dependency is `completed`. If a task **fails permanently**, downstream tasks still in `pending` are **cascaded** to `failed` (transitive, BFS).
 
 The worker logs a line like `echo: kind=echo attempt=1 payload=...`. `GET http://127.0.0.1:8080/healthz` checks DB + Redis connectivity.
 

@@ -146,8 +146,13 @@ func (r *Runtime) processTask(ctx context.Context, id uuid.UUID) {
 
 	h := r.handlerFor(task.Kind)
 	if h == nil {
-		_ = db.FailTaskPermanent(ctx, r.pool, runID, task.ID, "unknown task kind: "+task.Kind)
-		r.refreshJob(context.Background(), task.JobID)
+		reason := "unknown task kind: " + task.Kind
+		if err := db.FailTaskPermanent(ctx, r.pool, runID, task.ID, reason); err != nil {
+			log.Printf("worker: fail unknown kind: %v", err)
+		} else {
+			_ = db.CascadeFailPendingDependents(ctx, r.pool, task.ID, reason)
+			r.refreshJob(context.Background(), task.JobID)
+		}
 		return
 	}
 
@@ -198,6 +203,7 @@ func (r *Runtime) processTask(ctx context.Context, id uuid.UUID) {
 		if err := db.FailTaskPermanent(ctx, r.pool, runID, task.ID, errMsg); err != nil {
 			log.Printf("worker: fail permanent: %v", err)
 		} else {
+			_ = db.CascadeFailPendingDependents(ctx, r.pool, task.ID, errMsg)
 			r.refreshJob(context.Background(), task.JobID)
 		}
 		return
