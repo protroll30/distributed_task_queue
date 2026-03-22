@@ -1,10 +1,12 @@
 # distributed_task_queue
 
+[![CI](https://github.com/protroll30/distributed_task_queue/actions/workflows/ci.yml/badge.svg)](https://github.com/protroll30/distributed_task_queue/actions/workflows/ci.yml) *(forks: edit the badge URL in README to your repo)*
+
 Distributed task orchestrator in Go (CockroachDB + Redis). Design and schema: [INSTRUCTIONS.md](INSTRUCTIONS.md).
 
 ## Prerequisites
 
-- Go 1.22+
+- **Go 1.23+** (see `go` / `toolchain` in [`go.mod`](go.mod); CI uses [`go-version-file`](.github/workflows/ci.yml))
 - **Either** Docker (recommended for local dependencies) **or** your own CockroachDB + Redis
 
 ### Go build: `cannot find package` / `-mod=vendor`
@@ -13,6 +15,37 @@ If `go build` or `go run` fails with **cannot find package**, or *import lookup 
 
 - **Incomplete `vendor/`**: When a `vendor/` directory exists, Go may use **vendor mode** (`-mod=vendor`). Every dependency must appear under `vendor/` (for example `vendor/github.com/jackc/...`, `vendor/github.com/redis/...`). From the repo root run **`go mod vendor`** after `go.mod` is complete, or delete `vendor/` if you prefer module cache builds only.
 - **`GOFLAGS`**: If you set **`GOFLAGS=-mod=vendor`** globally (`go env -w`, shell profile, or Cursor/VS Code `go.buildFlags` / `go.toolsEnvVars`), either keep `vendor/` in sync with **`go mod vendor`** or remove `-mod=vendor` when `vendor/` is incomplete. Cloud sync (e.g. OneDrive) can sometimes leave `vendor/` partially synced—re-run **`go mod vendor`** locally if needed.
+
+## Reproducibility
+
+| Item | How it’s pinned |
+|------|-------------------|
+| Go toolchain | `go` / `toolchain` in [`go.mod`](go.mod) |
+| Modules | Committed [`go.sum`](go.sum); run `go mod download` and `go mod verify` after clone |
+| Containers | Pinned image tags in [`docker-compose.yml`](docker-compose.yml) (`cockroachdb/cockroach:v24.3.4`, `redis:7.4.2-alpine`) |
+| Schema | [`migrations/001_initial.sql`](migrations/001_initial.sql) via [`Makefile`](Makefile) `migrate`, [`scripts/migrate.sh`](scripts/migrate.sh), [`scripts/migrate.ps1`](scripts/migrate.ps1), or [`scripts/migrate.cmd`](scripts/migrate.cmd) (Windows **cmd**) |
+| CI | [`.github/workflows/ci.yml`](.github/workflows/ci.yml): `go mod verify`, `go vet`, `go test ./...`, `go build ./cmd/...` |
+
+After a fresh clone (Docker running), from the repo root:
+
+```bat
+docker compose up -d
+scripts\migrate.cmd
+set CRDB_DSN=postgresql://root@127.0.0.1:26257/defaultdb?sslmode=disable
+go run .\cmd\orchestrator
+```
+
+Use a **second** `cmd` window for `go run .\cmd\worker` with the same `CRDB_DSN`.
+
+Same checks as CI locally:
+
+```bash
+make verify
+```
+
+```bat
+scripts\verify.cmd
+```
 
 ## Docker Compose (local CockroachDB + Redis)
 
@@ -129,7 +162,7 @@ Jobs move **`pending` → `running` → `completed`** (or **`failed`**) as tasks
 
 - [`docker-compose.yml`](docker-compose.yml) — local CockroachDB + Redis
 - [`Makefile`](Makefile) — `make compose-up`, `make migrate`, …
-- `scripts/` — `migrate.sh` / `migrate.ps1` helpers
+- `scripts/` — `migrate.sh` / `migrate.ps1` / `migrate.cmd`, `verify.cmd` (same checks as CI / `make verify`)
 - `cmd/orchestrator` — HTTP API, DB ping, task submission
 - `cmd/worker` — worker process (`echo` demo handler)
 - `internal/config` — environment configuration

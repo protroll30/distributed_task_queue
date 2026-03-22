@@ -59,7 +59,7 @@ func MetricsHTTPHandler() http.Handler {
 }
 
 // MetricsMiddleware records request duration and counts for the wrapped handler (e.g. mux).
-// Uses r.Pattern when set (Go 1.22+ ServeMux) to avoid high-cardinality paths.
+// Uses r.Pattern when set (Go 1.23+ on *http.Request) to avoid high-cardinality paths.
 func MetricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}

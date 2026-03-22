@@ -1,6 +1,8 @@
 module github.com/distributed_task_queue/distributed_task_queue
 
-go 1.22
+go 1.23
+
+toolchain go1.23.4
 
 require (
 	github.com/google/uuid v1.6.0

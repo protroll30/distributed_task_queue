@@ -1,0 +1,2 @@
+# Consistent line endings for Go sources (helps CI vs Windows editors).
+*.go text eol=lf
