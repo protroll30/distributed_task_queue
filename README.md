@@ -68,6 +68,6 @@ Each process loads config, logs non-secret settings, then waits for Ctrl+C.
 - `cmd/orchestrator` — API + scheduler (stub; loads config)
 - `cmd/worker` — worker process (stub; loads config)
 - `internal/config` — environment configuration
-- `internal/db` — Cockroach pool helper (`pgxpool`)
+- `internal/db` — Cockroach pool (`pgxpool`), task/task_run lifecycle queries
 - `internal/redis` — Redis client, key layout, ready LIST, lease hashes, scheduled ZSET helpers
 - `pkg/worker` — task handler API types
