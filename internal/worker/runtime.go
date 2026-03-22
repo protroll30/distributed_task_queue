@@ -177,6 +177,18 @@ func (r *Runtime) processTask(ctx context.Context, id uuid.UUID) {
 			log.Printf("worker: complete: %v", err)
 		} else {
 			r.refreshJob(context.Background(), task.JobID)
+			promoted, err := db.PromoteUnblockedTasks(ctx, r.pool, task.ID)
+			if err != nil {
+				log.Printf("worker: promote dependents: %v", err)
+			} else if len(promoted) > 0 {
+				strs := make([]string, len(promoted))
+				for i, id := range promoted {
+					strs[i] = id.String()
+				}
+				if err := appredis.EnqueueTaskIDs(ctx, r.rdb, r.cfg.RedisKeyPrefix, appredis.DefaultPriority, strs); err != nil {
+					log.Printf("worker: enqueue promoted: %v", err)
+				}
+			}
 		}
 		return
 	}

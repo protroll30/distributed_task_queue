@@ -33,3 +33,18 @@ func BlockingPopReady(ctx context.Context, rdb *goredis.Client, key string, bloc
 func ReadyLen(ctx context.Context, rdb *goredis.Client, key string) (int64, error) {
 	return rdb.LLen(ctx, key).Result()
 }
+
+// EnqueueTaskIDs LPUSHes each task ID on the default ready list after TryReservePending.
+func EnqueueTaskIDs(ctx context.Context, rdb *goredis.Client, prefix, priority string, ids []string) error {
+	key := ReadyList(prefix, priority)
+	for _, id := range ids {
+		if _, err := TryReservePending(ctx, rdb, prefix, id, 5*time.Minute); err != nil {
+			return err
+		}
+		if err := EnqueueReady(ctx, rdb, key, id); err != nil {
+			_ = ReleasePending(ctx, rdb, prefix, id)
+			return err
+		}
+	}
+	return nil
+}

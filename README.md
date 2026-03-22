@@ -55,6 +55,16 @@ curl -sS -X POST http://127.0.0.1:8080/v1/tasks \
   -d '{"kind":"echo","payload":{"msg":"hi"}}'
 ```
 
+Multi-task job with a DAG (`b` runs after `a` completes successfully):
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/v1/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"tasks":[{"name":"a","kind":"echo","payload":{"n":1}},{"name":"b","kind":"echo","payload":{"n":2},"depends_on":["a"]}]}'
+```
+
+Task names must be unique per job. Dependency edges are validated (unknown names, self-deps, and cycles return **400**). A dependent is promoted to `queued` only when **every** dependency is `completed` (a permanently failed upstream leaves dependents stuck in `pending` until a future release adds cascade).
+
 The worker logs a line like `echo: kind=echo attempt=1 payload=...`. `GET http://127.0.0.1:8080/healthz` checks DB + Redis connectivity.
 
 Jobs move **`pending` → `running` → `completed`** (or **`failed`**) as tasks finish; the orchestrator **reconciler** periodically re-enqueues **`queued`** rows that are due (`scheduled_at <= now()`), using Redis **pending** markers to avoid spamming duplicate LPUSHes.

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/distributed_task_queue/distributed_task_queue/internal/db"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -26,10 +27,27 @@ type submitResponse struct {
 	TaskID string `json:"task_id"`
 }
 
+type jobTaskRequest struct {
+	Name      string          `json:"name"`
+	Kind      string          `json:"kind"`
+	Payload   json.RawMessage `json:"payload"`
+	DependsOn []string        `json:"depends_on"`
+}
+
+type jobRequest struct {
+	Tasks []jobTaskRequest `json:"tasks"`
+}
+
+type jobResponse struct {
+	JobID string            `json:"job_id"`
+	Tasks map[string]string `json:"tasks"`
+}
+
 // Register attaches routes to mux.
 func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /v1/tasks", s.handleSubmit)
+	mux.HandleFunc("POST /v1/jobs", s.handleSubmitJob)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -73,4 +91,49 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(submitResponse{TaskID: id.String()})
+}
+
+func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req jobRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if len(req.Tasks) == 0 {
+		http.Error(w, "tasks is required", http.StatusBadRequest)
+		return
+	}
+	specs := make([]db.TaskSpec, 0, len(req.Tasks))
+	for _, t := range req.Tasks {
+		payload := []byte(t.Payload)
+		if len(t.Payload) == 0 {
+			payload = nil
+		}
+		specs = append(specs, db.TaskSpec{
+			Name:      t.Name,
+			Kind:      t.Kind,
+			Payload:   payload,
+			DependsOn: t.DependsOn,
+		})
+	}
+	if err := validateJobSpecs(specs); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	jobID, nameToID, err := SubmitJob(r.Context(), s.Pool, s.RDB, s.Prefix, specs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make(map[string]string, len(nameToID))
+	for n, id := range nameToID {
+		out[n] = id.String()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(jobResponse{JobID: jobID.String(), Tasks: out})
 }

@@ -8,6 +8,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// TaskSpec defines one task inside a job. DependsOn lists other task names in the same job.
+type TaskSpec struct {
+	Name      string
+	Kind      string
+	Payload   []byte
+	DependsOn []string
+}
+
 // CreateJobWithQueuedTask inserts a pending job and one queued task in a single transaction.
 func CreateJobWithQueuedTask(ctx context.Context, pool *pgxpool.Pool, jobName, taskName, kind string, payload []byte, maxAttempts int) (taskID uuid.UUID, err error) {
 	tx, err := pool.Begin(ctx)
@@ -31,6 +39,62 @@ RETURNING id`, jobID, taskName, kind, payload, maxAttempts).Scan(&taskID); err !
 		return uuid.Nil, err
 	}
 	return taskID, nil
+}
+
+// CreateJobWithTasks inserts a job, tasks, and dependency edges in one transaction.
+// Tasks with no dependencies are queued; others start pending until dependencies complete.
+func CreateJobWithTasks(ctx context.Context, pool *pgxpool.Pool, jobName string, maxAttempts int, specs []TaskSpec) (jobID uuid.UUID, nameToID map[string]uuid.UUID, initialEnqueue []uuid.UUID, err error) {
+	if len(specs) == 0 {
+		return uuid.Nil, nil, nil, fmt.Errorf("db: at least one task is required")
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, nil, nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := tx.QueryRow(ctx, `
+INSERT INTO jobs (name, status) VALUES ($1, 'pending') RETURNING id`, jobName).Scan(&jobID); err != nil {
+		return uuid.Nil, nil, nil, err
+	}
+
+	nameToID = make(map[string]uuid.UUID, len(specs))
+	for _, sp := range specs {
+		st := "pending"
+		if len(sp.DependsOn) == 0 {
+			st = "queued"
+		}
+		var tid uuid.UUID
+		if err := tx.QueryRow(ctx, `
+INSERT INTO tasks (job_id, name, kind, status, payload, max_attempts, attempt, scheduled_at)
+VALUES ($1, $2, $3, $4, $5, $6, 0, now())
+RETURNING id`, jobID, sp.Name, sp.Kind, st, sp.Payload, maxAttempts).Scan(&tid); err != nil {
+			return uuid.Nil, nil, nil, err
+		}
+		nameToID[sp.Name] = tid
+		if st == "queued" {
+			initialEnqueue = append(initialEnqueue, tid)
+		}
+	}
+
+	for _, sp := range specs {
+		tid := nameToID[sp.Name]
+		for _, depName := range sp.DependsOn {
+			did, ok := nameToID[depName]
+			if !ok {
+				return uuid.Nil, nil, nil, fmt.Errorf("db: unknown dependency name %q for task %q", depName, sp.Name)
+			}
+			if _, err := tx.Exec(ctx, `
+INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ($1, $2)`, tid, did); err != nil {
+				return uuid.Nil, nil, nil, err
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, nil, nil, err
+	}
+	return jobID, nameToID, initialEnqueue, nil
 }
 
 // RefreshJobStatus sets jobs.status from tasks: any failed → failed; all completed → completed;
