@@ -1,6 +1,6 @@
 # Distributed task orchestrator — technical specification
 
-This document is the authoritative design for a **distributed task orchestrator** implemented in **Go**, with **CockroachDB** as the durable source of truth and **Redis** for queues, leases, and coordination.
+This document is the design reference for a **distributed task orchestrator** implemented in **Go**, with **CockroachDB** as the durable source of truth and **Redis** for queues, leases, and coordination. Sections marked **(implemented)** match the current repository; where the spec offers alternatives (e.g. Streams vs Lists), the notes call out what this codebase does.
 
 ---
 
@@ -59,7 +59,7 @@ flowchart LR
   W2 --> CRDB
 ```
 
-**Invariant:** If Redis is flushed or inconsistent, the system must remain correct by scanning CRDB for tasks that are `pending` or `running` (with expired leases) and re-enqueueing. Redis is an optimization, not the system of record.
+**Invariant:** If Redis is flushed or inconsistent, the system remains correct by reconciling from CRDB: **(implemented)** the orchestrator periodically selects **`queued`** tasks with `scheduled_at <= now()` and LPUSHes task IDs after a Redis **pending** marker (`SET NX`) to avoid duplicate enqueue storms; it also **reclaims** **`running`** tasks that are older than a configurable threshold **and** have **no Redis lease key** (worker heartbeats stopped), closing open `task_runs` and returning the task to `queued`. Redis is an optimization, not the system of record.
 
 ---
 
@@ -70,22 +70,26 @@ Idiomatic Go layout with multiple binaries and a small public package for task a
 ```
 distributed_task_queue/
 ├── cmd/
-│   ├── orchestrator/          # API + scheduler / reconciler entrypoint
+│   ├── orchestrator/          # API + reconciler loop entrypoint
 │   └── worker/                # Worker process entrypoint
 ├── internal/
 │   ├── config/                # Env and config loading
 │   ├── db/                    # CRDB pool, queries, transaction helpers
 │   ├── redis/                 # Redis client, key helpers, queue + lease ops
-│   ├── orchestrator/          # Domain: jobs, tasks, deps, state machine
+│   ├── orchestrator/          # Submit, HTTP handlers, DAG validation, reconcile / reclaim
 │   └── worker/                # Runtime: poll, lease, invoke handlers, ack/nack
 ├── pkg/
 │   └── worker/                # Stable types + Runtime/Handler API for imports
-├── migrations/                # SQL migrations (e.g. goose, golang-migrate)
+├── migrations/                # SQL (apply with cockroach sql or scripts/migrate.*)
+├── scripts/                   # migrate.sh / migrate.ps1 helpers
+├── docker-compose.yml         # Local CockroachDB + Redis
+├── Makefile                   # compose, migrate shortcuts
+├── .env.example
 ├── INSTRUCTIONS.md            # This document
 └── README.md
 ```
 
-- **`cmd/orchestrator`:** wires config, DB, Redis, HTTP/gRPC servers, and background reconciler.
+- **`cmd/orchestrator`:** wires config, DB, Redis, HTTP server, and background reconciler (due-queue + stale-running reclaim).
 - **`cmd/worker`:** constructs `pkg/worker.Runtime`, registers kinds, runs until signal shutdown.
 - **`internal/*`:** implementation details not imported by external modules.
 - **`pkg/worker`:** minimal surface for teams that define tasks in separate repos: `Task`, `Handler`, `Runtime`, and option types.
@@ -107,7 +111,7 @@ distributed_task_queue/
 
 **`tasks.status`:** `pending`, `queued`, `running`, `completed`, `failed`, `cancelled`
 
-**`task_runs.status`:** `running`, `succeeded`, `failed`, `dead`
+**`task_runs.status`:** `running`, `succeeded`, `failed` (implementation; a `dead` / stale-run distinction may be added later)
 
 ### DDL
 
@@ -185,7 +189,7 @@ v1 recommendation: implement **leases in Redis**; use **`workers` table** only i
 
 ### Job aggregate status (logic, not extra columns required)
 
-Derive `jobs.status` from tasks or update it in the orchestrator when task transitions settle (e.g. all tasks `completed` → job `completed`; any task `failed` and no more retries → job `failed`). Document the chosen rule set in code next to the state machine.
+**(implemented)** `RefreshJobStatus` updates `jobs.status` from task counts: any `failed` → job `failed`; all `completed` or `cancelled` → `completed` or `cancelled`; otherwise `running`. Invoked after task transitions from the worker and after stale reclaim in the orchestrator.
 
 ---
 
@@ -195,10 +199,9 @@ Redis keys are **namespaced** with a configurable prefix (e.g. `dto:` for “dis
 
 ### Ready queue
 
-- **Streams (recommended for consumer groups):**  
-  `dto:queue:ready:{priority}` — stream entries with fields at minimum `task_id` (UUID string). Priorities `low`, `default`, `high` or numeric tiers as needed.
-- **Alternative — Lists:**  
-  `dto:queue:ready:{priority}` as LIST with `LPUSH` / `BRPOP` — simpler but no built-in consumer-group ack model; lease handling must be stricter in application code.
+**Implemented:** **Lists** — `{prefix}queue:ready:{priority}` as LIST with `LPUSH` (enqueue) and `BRPOP` (workers). Default priority tier is `default`. Streams are not used in this repository.
+
+- *Spec alternative (not implemented here):* Redis Streams with consumer groups on the same key pattern for richer ack semantics.
 
 ### Lease / visibility
 
@@ -208,12 +211,17 @@ Per claimed task, store lease metadata so other workers do not claim it until ex
   Fields: `worker_id`, `deadline_ms` (or `deadline` as Unix ms string), optional `run_id` (UUID of `task_runs` row).
 - **TTL:** set **EXPIRE** on the hash to slightly exceed lease duration so orphaned keys disappear; correctness still comes from CRDB reconciliation if a worker dies without releasing.
 
-**Claim flow (conceptual):** pop or read a message from the ready structure → set lease hash → worker executes → delete hash on success path or let TTL expire on crash.
+**Claim flow (implemented):** worker `BRPOP` → CRDB `ClaimQueuedTask` (queued→running) → `InsertTaskRun` → `SetLease` on the hash → handler runs → `DeleteLease` on success path; heartbeat extends key TTL until completion.
+
+### Pending enqueue deduplication
+
+**Implemented:** `{prefix}queue:pending:{task_id}` — short TTL via `SET NX` so the reconciler and other producers do not LPUSH the same task repeatedly while it is already queued or in flight. Released when a worker successfully claims the task.
 
 ### Delayed / scheduled tasks
 
-- **Sorted set:** `dto:queue:scheduled` — member `task_id`, score = run-after time in **Unix milliseconds**.  
-  A scheduler loop uses `ZRANGEBYSCORE` up to `now` to move due tasks into the ready queue and update CRDB `tasks.status` to `queued` as needed.
+- **CRDB + reconciler (implemented):** `tasks.scheduled_at` is authoritative. The orchestrator reconciler selects **`queued`** rows with `scheduled_at <= now()` and enqueues to Redis (after `TryReservePending`). Retries and dependency promotion set `scheduled_at` in CRDB; no separate ZSET pass is required for those paths.
+
+- **Sorted set helpers:** `{prefix}queue:scheduled` — `internal/redis` provides `ScheduleAt` / `DueTaskIDs` / `ZRem` for a ZSET-based delay path; **submit and reconcile do not currently drive work exclusively through this ZSET** (delayed submit API may be layered on later).
 
 ### Optional: claim deduplication
 
@@ -229,7 +237,7 @@ Per claimed task, store lease metadata so other workers do not claim it until ex
 
 ### Canonical state
 
-**CockroachDB always wins** for `tasks.status` and attempts. Redis entries that disagree with CRDB must be discarded during reconciliation. Recovery: query CRDB for tasks in `queued` or `running` with lease expired (or missing Redis lease) and re-enqueue.
+**CockroachDB always wins** for `tasks.status` and attempts. Redis entries that disagree with CRDB are harmless at claim time (`ClaimQueuedTask` gates execution). Recovery: reconciler re-enqueues due **`queued`** rows; separate path **reclaims** stale **`running`** rows when the Redis lease key is absent (see §2 invariant).
 
 ---
 
@@ -296,7 +304,40 @@ Implementations in `internal/worker` construct `Runtime` with Redis + DB clients
 
 ---
 
-## 7. Operational contracts
+## 7. Orchestrator HTTP API (implemented)
+
+The control plane is **HTTP only** (no gRPC in this repo). Bind address: `ORCHESTRATOR_LISTEN` (default `:8080`).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/healthz` | **200** if CockroachDB and Redis ping succeed; **503** otherwise |
+| `POST` | `/v1/tasks` | JSON body `{"kind","payload"}` — creates a single-task job, enqueues task ID; **201** + `{"task_id"}` |
+| `GET` | `/v1/tasks/{id}` | Task row JSON (status, attempts, timestamps, payload); **404** if unknown; **400** if `id` is not a UUID |
+| `POST` | `/v1/jobs` | JSON body `{"tasks":[...]}` — DAG job with `name`, `kind`, `payload`, optional `depends_on` (names); **201** + `job_id` and `tasks` name→id map; **400** on validation (cycles, unknown deps, etc.) |
+| `GET` | `/v1/jobs/{id}` | Job metadata + all tasks in the job; **404** / **400** as above |
+
+---
+
+## 8. Configuration (implemented)
+
+Loaded from the environment by both `cmd/orchestrator` and `cmd/worker` (`internal/config`). `CRDB_DSN` is required.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CRDB_DSN` | — | Postgres-compatible DSN for CockroachDB (`pgxpool`) |
+| `REDIS_ADDR` | `127.0.0.1:6379` | Redis server address |
+| `REDIS_KEY_PREFIX` | `dto:` | Prefix for all Redis keys |
+| `ORCHESTRATOR_LISTEN` | `:8080` | Orchestrator HTTP bind |
+| `RECONCILE_INTERVAL` | `30s` | How often the reconciler runs due-queue + stale-running reclaim |
+| `STALE_RUNNING_AFTER` | `2 × LEASE_DURATION` | Minimum time a task may stay `running` before reclaim is considered (still requires Redis lease to be absent) |
+| `WORKER_ID` | random UUID | Stable worker identity for `task_runs.worker_id` |
+| `WORKER_CONCURRENCY` | `1` | Parallel BRPOP loops in the worker |
+| `LEASE_DURATION` | `30s` | Logical lease window; Redis key TTL adds a buffer |
+| `RETRY_BACKOFF` | `5s` | Delay before a failed task is re-queued when attempts remain |
+
+---
+
+## 9. Operational contracts
 
 ### Handler `kind` versioning
 
@@ -319,17 +360,17 @@ No enforced schema in v1 beyond JSON; document expected fields per `kind` in tea
 
 ### Configuration (reference)
 
-Environment variables (names are illustrative): `CRDB_DSN`, `REDIS_ADDR`, `REDIS_KEY_PREFIX`, `ORCHESTRATOR_LISTEN`, `WORKER_CONCURRENCY`, `LEASE_DURATION`, `RECONCILE_INTERVAL`.
+See **§8** for the authoritative environment table used by this repository.
 
 ---
 
-## 8. Summary
+## 10. Summary
 
 | Layer | Responsibility |
 |--------|----------------|
 | **CockroachDB** | Jobs, tasks, DAG edges, run history, idempotency, authoritative status |
 | **Redis** | Ready queue, leases, scheduled ZSET, optional wake/ratelimit |
-| **Orchestrator** | API, enqueue, dependency resolution, reconciliation |
+| **Orchestrator** | HTTP API (§7), submit enqueue, DAG validation, `ReconcileOnce` (due queued → Redis), `ReclaimStaleRunningOnce` (stale running → queued) |
 | **Worker (`pkg/worker`)** | Register `Handler` by `kind`, `Run` loop, at-least-once execution with lease + heartbeat |
 
-This spec is sufficient to scaffold `go.mod`, migrations, and the first vertical slice: create job → enqueue → worker runs handler → persist result.
+The repository implements the vertical slice: create job or task → **LPUSH** to Redis → worker **BRPOP** → claim → run handler → persist result → optional DAG promote / cascade fail; **GET** APIs for observability. Remaining product gaps (auth, metrics, cancellation, optional ZSET-only delay path) are out of scope for this spec unless added later.
