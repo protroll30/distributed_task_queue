@@ -81,7 +81,17 @@ func reconcileLoop(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Client,
 			}
 			log.Printf("reconciler: %v", err)
 		} else if n > 0 {
-			log.Printf("reconciler: enqueued %d task(s)", n)
+			log.Printf("reconciler: enqueued %d due queued task(s)", n)
+		}
+
+		r, err := orchestrator.ReclaimStaleRunningOnce(ctx, pool, rdb, cfg)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("reconciler: stale running: %v", err)
+		} else if r > 0 {
+			log.Printf("reconciler: reclaimed %d stale running task(s)", r)
 		}
 		select {
 		case <-ctx.Done():

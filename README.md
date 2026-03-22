@@ -57,6 +57,7 @@ Loaded by both binaries via [`internal/config`](internal/config/config.go). `CRD
 | `REDIS_KEY_PREFIX` | `dto:` | Prefix for Redis keys (see INSTRUCTIONS) |
 | `ORCHESTRATOR_LISTEN` | `:8080` | Orchestrator HTTP bind (`GET /healthz`, `POST /v1/tasks`) |
 | `RECONCILE_INTERVAL` | `30s` | Background reconciler: re-enqueue due `queued` tasks (CRDB → Redis) |
+| `STALE_RUNNING_AFTER` | `2 × LEASE_DURATION` | Min time a task stays `running` before the reconciler may reclaim it if the Redis lease key is missing |
 | `WORKER_ID` | random UUID | Stable worker identity if set |
 | `WORKER_CONCURRENCY` | `1` | Parallel BRPOP worker loops |
 | `LEASE_DURATION` | `30s` | Logical lease window; Redis key TTL adds a buffer |
@@ -95,7 +96,7 @@ Task names must be unique per job. Dependency edges are validated (unknown names
 
 The worker logs a line like `echo: kind=echo attempt=1 payload=...`. `GET http://127.0.0.1:8080/healthz` checks DB + Redis connectivity.
 
-Jobs move **`pending` → `running` → `completed`** (or **`failed`**) as tasks finish; the orchestrator **reconciler** periodically re-enqueues **`queued`** rows that are due (`scheduled_at <= now()`), using Redis **pending** markers to avoid spamming duplicate LPUSHes.
+Jobs move **`pending` → `running` → `completed`** (or **`failed`**) as tasks finish; the orchestrator **reconciler** periodically re-enqueues **`queued`** rows that are due (`scheduled_at <= now()`), using Redis **pending** markers to avoid spamming duplicate LPUSHes. If a worker dies after claiming a task, the Redis lease **TTL** expires (heartbeats stop); the reconciler also **reclaims** long-running `running` rows with **no lease**—closing the open `task_run`, re-queuing the task (same retry budget), and LPUSHing again.
 
 ## Layout
 
@@ -107,6 +108,6 @@ Jobs move **`pending` → `running` → `completed`** (or **`failed`**) as tasks
 - `internal/config` — environment configuration
 - `internal/db` — Cockroach pool (`pgxpool`), jobs/tasks, task_run lifecycle
 - `internal/redis` — Redis client, key layout, ready LIST, lease hashes, scheduled ZSET helpers
-- `internal/orchestrator` — submit path, HTTP handlers, reconciler (`ReconcileOnce`)
+- `internal/orchestrator` — submit path, HTTP handlers, reconciler (`ReconcileOnce`, `ReclaimStaleRunningOnce`)
 - `internal/worker` — `pkg/worker.Runtime` implementation
 - `pkg/worker` — task handler API types

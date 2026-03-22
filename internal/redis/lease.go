@@ -36,6 +36,15 @@ func DeleteLease(ctx context.Context, rdb *goredis.Client, key string) error {
 	return rdb.Del(ctx, key).Err()
 }
 
+// LeaseExists reports whether a lease key is present (worker still refreshing TTL or not yet expired).
+func LeaseExists(ctx context.Context, rdb *goredis.Client, key string) (bool, error) {
+	n, err := rdb.Exists(ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // RefreshLeaseTTL extends EXPIRE for heartbeat. If the key no longer exists, returns ErrLeaseKeyMissing.
 func RefreshLeaseTTL(ctx context.Context, rdb *goredis.Client, key string, keyTTL time.Duration) error {
 	ok, err := rdb.Expire(ctx, key, keyTTL).Result()

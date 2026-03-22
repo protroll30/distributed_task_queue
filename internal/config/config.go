@@ -20,6 +20,9 @@ type Config struct {
 	WorkerConcurrency  int
 	LeaseDuration      time.Duration
 	RetryBackoff       time.Duration
+	// StaleRunningAfter is the minimum time a task may stay status=running before the
+	// reconciler considers reclaiming it when the Redis lease key is absent.
+	StaleRunningAfter time.Duration
 }
 
 // Load reads configuration from the environment. CRDB_DSN is required; other fields use documented defaults.
@@ -62,6 +65,15 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("RETRY_BACKOFF: %w", err)
 		}
 		c.RetryBackoff = d
+	}
+
+	c.StaleRunningAfter = 2 * c.LeaseDuration
+	if v := os.Getenv("STALE_RUNNING_AFTER"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("STALE_RUNNING_AFTER: %w", err)
+		}
+		c.StaleRunningAfter = d
 	}
 
 	if v := os.Getenv("WORKER_CONCURRENCY"); v != "" {
