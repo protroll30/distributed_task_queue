@@ -4,8 +4,6 @@
 
 Distributed task orchestrator in Go (CockroachDB + Redis). Design and schema: [INSTRUCTIONS.md](INSTRUCTIONS.md).
 
-If the badge stays **grey** while GitHub Actions is green: **private** repos don’t show workflow status to anonymous badge fetches (GitHub limitation). Make the repo **public** for a green badge, or ignore the badge and rely on the **Actions** tab.
-
 ## Prerequisites
 
 - **Go 1.23+** (see `go` / `toolchain` in [`go.mod`](go.mod); CI uses [`go-version-file`](.github/workflows/ci.yml))
