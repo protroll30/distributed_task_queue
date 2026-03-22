@@ -1,8 +1,10 @@
 # distributed_task_queue
 
-[![CI](https://github.com/protroll30/distributed_task_queue/actions/workflows/ci.yml/badge.svg)](https://github.com/protroll30/distributed_task_queue/actions/workflows/ci.yml) *(forks: edit the badge URL in README to your repo)*
+[![CI](https://github.com/protroll30/distributed_task_queue/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/protroll30/distributed_task_queue/actions/workflows/ci.yml?query=branch%3Amain) *(forks: edit the badge URL in README to your repo)*
 
 Distributed task orchestrator in Go (CockroachDB + Redis). Design and schema: [INSTRUCTIONS.md](INSTRUCTIONS.md).
+
+If the badge stays **grey** while GitHub Actions is green: **private** repos don’t show workflow status to anonymous badge fetches (GitHub limitation). Make the repo **public** for a green badge, or ignore the badge and rely on the **Actions** tab.
 
 ## Prerequisites
 
