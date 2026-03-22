@@ -69,5 +69,5 @@ Each process loads config, logs non-secret settings, then waits for Ctrl+C.
 - `cmd/worker` — worker process (stub; loads config)
 - `internal/config` — environment configuration
 - `internal/db` — Cockroach pool helper (`pgxpool`)
-- `internal/redis` — Redis client
+- `internal/redis` — Redis client, key layout, ready LIST, lease hashes, scheduled ZSET helpers
 - `pkg/worker` — task handler API types
