@@ -47,7 +47,9 @@ type jobResponse struct {
 func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /v1/tasks", s.handleSubmit)
+	mux.HandleFunc("GET /v1/tasks/{id}", s.handleGetTask)
 	mux.HandleFunc("POST /v1/jobs", s.handleSubmitJob)
+	mux.HandleFunc("GET /v1/jobs/{id}", s.handleGetJob)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

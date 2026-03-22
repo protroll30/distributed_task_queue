@@ -55,7 +55,7 @@ Loaded by both binaries via [`internal/config`](internal/config/config.go). `CRD
 | `CRDB_DSN` | — | CockroachDB / Postgres DSN for `pgx` |
 | `REDIS_ADDR` | `127.0.0.1:6379` | Redis address |
 | `REDIS_KEY_PREFIX` | `dto:` | Prefix for Redis keys (see INSTRUCTIONS) |
-| `ORCHESTRATOR_LISTEN` | `:8080` | Orchestrator HTTP bind (`GET /healthz`, `POST /v1/tasks`) |
+| `ORCHESTRATOR_LISTEN` | `:8080` | Orchestrator HTTP bind (`GET /healthz`, task/job read + submit routes below) |
 | `RECONCILE_INTERVAL` | `30s` | Background reconciler: re-enqueue due `queued` tasks (CRDB → Redis) |
 | `STALE_RUNNING_AFTER` | `2 × LEASE_DURATION` | Min time a task stays `running` before the reconciler may reclaim it if the Redis lease key is missing |
 | `WORKER_ID` | random UUID | Stable worker identity if set |
@@ -96,6 +96,20 @@ Task names must be unique per job. Dependency edges are validated (unknown names
 
 The worker logs a line like `echo: kind=echo attempt=1 payload=...`. `GET http://127.0.0.1:8080/healthz` checks DB + Redis connectivity.
 
+**Read APIs** — `GET /v1/tasks/{id}` returns a task row (status, attempts, timestamps, payload). `GET /v1/jobs/{id}` returns the job plus all tasks in that job. Unknown UUIDs return **404**; malformed IDs return **400**.
+
+```bash
+curl -sS "http://127.0.0.1:8080/v1/tasks/<task_id>"
+curl -sS "http://127.0.0.1:8080/v1/jobs/<job_id>"
+```
+
+Integration tests that hit the DB and Redis run when `CRDB_DSN` is set (e.g. after `docker compose up`):
+
+```bash
+set CRDB_DSN=postgresql://root@127.0.0.1:26257/defaultdb?sslmode=disable
+go test ./internal/orchestrator/ -count=1 -v
+```
+
 Jobs move **`pending` → `running` → `completed`** (or **`failed`**) as tasks finish; the orchestrator **reconciler** periodically re-enqueues **`queued`** rows that are due (`scheduled_at <= now()`), using Redis **pending** markers to avoid spamming duplicate LPUSHes. If a worker dies after claiming a task, the Redis lease **TTL** expires (heartbeats stop); the reconciler also **reclaims** long-running `running` rows with **no lease**—closing the open `task_run`, re-queuing the task (same retry budget), and LPUSHing again.
 
 ## Layout
@@ -108,6 +122,6 @@ Jobs move **`pending` → `running` → `completed`** (or **`failed`**) as tasks
 - `internal/config` — environment configuration
 - `internal/db` — Cockroach pool (`pgxpool`), jobs/tasks, task_run lifecycle
 - `internal/redis` — Redis client, key layout, ready LIST, lease hashes, scheduled ZSET helpers
-- `internal/orchestrator` — submit path, HTTP handlers, reconciler (`ReconcileOnce`, `ReclaimStaleRunningOnce`)
+- `internal/orchestrator` — submit path, HTTP handlers (`GET`/`POST` v1), reconciler (`ReconcileOnce`, `ReclaimStaleRunningOnce`)
 - `internal/worker` — `pkg/worker.Runtime` implementation
 - `pkg/worker` — task handler API types

@@ -53,6 +53,31 @@ FROM tasks WHERE id = $1`
 	return t, nil
 }
 
+// ListTasksByJobID returns all tasks for a job, ordered by name then id.
+func ListTasksByJobID(ctx context.Context, pool *pgxpool.Pool, jobID uuid.UUID) ([]Task, error) {
+	const q = `
+SELECT id, job_id, name, kind, status, payload, max_attempts, attempt, scheduled_at, started_at, finished_at, last_error
+FROM tasks WHERE job_id = $1
+ORDER BY name ASC, id ASC`
+	rows, err := pool.Query(ctx, q, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Task
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(
+			&t.ID, &t.JobID, &t.Name, &t.Kind, &t.Status, &t.Payload, &t.MaxAttempts, &t.Attempt,
+			&t.ScheduledAt, &t.StartedAt, &t.FinishedAt, &t.LastError,
+		); err != nil {
+			return out, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // ClaimQueuedTask atomically increments attempt, sets status=running, and timestamps for a queued task.
 // If the task is not queued, returns ErrTaskNotClaimable.
 func ClaimQueuedTask(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (Task, error) {

@@ -2,11 +2,45 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// Job is a jobs row for read APIs.
+type Job struct {
+	ID        uuid.UUID
+	Name      string
+	Status    string
+	Metadata  []byte
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// ErrJobNotFound is returned when no row matches the job id.
+var ErrJobNotFound = errors.New("db: job not found")
+
+// GetJobByID loads a job by primary key.
+func GetJobByID(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (Job, error) {
+	const q = `
+SELECT id, name, status, COALESCE(metadata, 'null'::jsonb), created_at, updated_at
+FROM jobs WHERE id = $1`
+	var j Job
+	err := pool.QueryRow(ctx, q, id).Scan(
+		&j.ID, &j.Name, &j.Status, &j.Metadata, &j.CreatedAt, &j.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Job{}, ErrJobNotFound
+		}
+		return Job{}, err
+	}
+	return j, nil
+}
 
 // TaskSpec defines one task inside a job. DependsOn lists other task names in the same job.
 type TaskSpec struct {
